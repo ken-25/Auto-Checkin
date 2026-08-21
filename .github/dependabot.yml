@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # GitHub Actionsのアップデートを週次でチェック
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+
+  # requirements.txtのライブラリ（Playwrightなど）のアップデートも自動チェックしたい場合
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
