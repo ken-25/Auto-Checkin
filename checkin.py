@@ -4,9 +4,9 @@ GitHub Actions から実行される想定。必要な環境変数:
   USER_NAME / USER_PASSWORD / TARGET_URL  … Secrets から渡す
 任意の環境変数（サイトの作りに合わせて上書きしたい場合のみ。Variables で設定）:
   LOGIN_URL, USER_SELECTOR, PASS_SELECTOR, SUBMIT_SELECTOR,
-  CHECKIN_SELECTOR, CHECKIN_TEXTS, ALREADY_TEXTS, SUCCESS_TEXTS, DEBUG_DUMP
+  CHECKIN_SELECTOR, CHECKIN_TEXTS, ALREADY_TEXTS, SUCCESS_TEXTS, MAINTENANCE_TEXTS, DEBUG_DUMP
 
-終了コード: 0 = 押した／既に押し済み、 1 = 失敗（要調査）
+終了コード: 0 = 押した／既に押し済み／サイトがメンテナンス中（警告のみ）、 1 = 失敗（要調査）
 """
 
 import os
@@ -76,6 +76,24 @@ SUCCESS_TEXTS = _list_from_env(
 )
 
 
+# ボタンが見つからないときにこれがあれば「サイトがメンテナンス中」と判断する語
+MAINTENANCE_TEXTS = _list_from_env(
+    "MAINTENANCE_TEXTS",
+    [
+        "メンテナンス中", "システムメンテナンス", "メンテナンスを実施", "メンテナンスのため",
+        "サービスを一時停止", "一時的にご利用いただけません", "ただいまご利用いただけません",
+        "maintenance",
+    ],
+)
+
+# この HTTP ステータスが返ってきたらメンテナンス／一時停止とみなす
+MAINTENANCE_STATUSES = (502, 503, 504)
+
+
+class MaintenanceError(Exception):
+    """サイトがメンテナンス中などで、今回はチェックインできない状態。リトライしても無駄なので即終了する。"""
+
+
 # ------------------------------------------------------------------ ユーティリティ
 
 def log(msg):
@@ -109,6 +127,17 @@ def page_text(page):
         return page.inner_text("body", timeout=5000)
     except Exception:
         return ""
+
+
+def check_response(response, url):
+    """goto の結果がメンテナンスを示すステータスなら MaintenanceError を投げる。"""
+    if response is not None and response.status in MAINTENANCE_STATUSES:
+        raise MaintenanceError(f"{url} が HTTP {response.status} を返しました")
+
+
+def goto(page, url):
+    check_response(page.goto(url, wait_until="domcontentloaded"), url)
+    settle(page)
 
 
 def is_login_page(page):
@@ -260,30 +289,36 @@ def run_once(playwright):
     try:
         start_url = LOGIN_URL or TARGET_URL
         log(f"アクセス: {start_url}")
-        page.goto(start_url, wait_until="domcontentloaded")
-        settle(page)
+        goto(page, start_url)
 
         if is_login_page(page):
             do_login(page)
 
         if norm(page.url) != norm(TARGET_URL):
             log(f"チェックインページへ移動: {TARGET_URL}")
-            page.goto(TARGET_URL, wait_until="domcontentloaded")
-            settle(page)
+            goto(page, TARGET_URL)
 
         if is_login_page(page):
             # ログイン直後にまた飛ばされた場合（セッションが確立していない）
             do_login(page)
-            page.goto(TARGET_URL, wait_until="domcontentloaded")
-            settle(page)
+            goto(page, TARGET_URL)
 
         button, labels = find_checkin_button(page)
 
         if button is None:
-            hit = contains_any(page_text(page), ALREADY_TEXTS)
+            text = page_text(page)
+            hit = contains_any(text, ALREADY_TEXTS)
             if hit:
                 log(f"本日は既にチェックイン済みでした（判定語: {hit}）。何もせず終了します。")
                 return True
+            try:
+                title = page.title()
+            except Exception:
+                title = ""
+            # 本文に書かれず <title> だけに「メンテナンスのお知らせ」と出るページもあるので両方見る
+            hit = contains_any(f"{title} {text}", MAINTENANCE_TEXTS)
+            if hit:
+                raise MaintenanceError(f"ページに『{hit}』の表示があります（URL: {page.url}）")
             report_unknown(page, labels)
             return False
 
@@ -324,6 +359,13 @@ def main():
             try:
                 if run_once(playwright):
                     return 0
+            except MaintenanceError as exc:
+                # メンテナンスはこちらの不具合ではないので失敗扱いにしない（次回の定時実行に任せる）
+                log(f"サイトがメンテナンス中のため、今回はチェックインをスキップします: {scrub(str(exc))}")
+                print("::warning title=サイトメンテナンス中::"
+                      "チェックインできませんでした。次回の定時実行で再試行されます。"
+                      "必要ならメンテナンス明けに手動実行してください。", flush=True)
+                return 0
             except Exception as exc:  # noqa: BLE001 - 原因を出して次の試行へ
                 log(f"エラー: {scrub(f'{type(exc).__name__}: {exc}')}")
             if attempt < ATTEMPTS:

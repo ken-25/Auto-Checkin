@@ -53,5 +53,6 @@ jobs:
           CHECKIN_TEXTS: ${{ vars.CHECKIN_TEXTS }}
           ALREADY_TEXTS: ${{ vars.ALREADY_TEXTS }}
           SUCCESS_TEXTS: ${{ vars.SUCCESS_TEXTS }}
+          MAINTENANCE_TEXTS: ${{ vars.MAINTENANCE_TEXTS }}
           DEBUG_DUMP: ${{ inputs.debug }}
         run: python checkin.py
