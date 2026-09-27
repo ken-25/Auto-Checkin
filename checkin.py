@@ -311,7 +311,12 @@ def run_once(playwright):
             if hit:
                 log(f"本日は既にチェックイン済みでした（判定語: {hit}）。何もせず終了します。")
                 return True
-            hit = contains_any(text, MAINTENANCE_TEXTS)
+            try:
+                title = page.title()
+            except Exception:
+                title = ""
+            # 本文に書かれず <title> だけに「メンテナンスのお知らせ」と出るページもあるので両方見る
+            hit = contains_any(f"{title} {text}", MAINTENANCE_TEXTS)
             if hit:
                 raise MaintenanceError(f"ページに『{hit}』の表示があります（URL: {page.url}）")
             report_unknown(page, labels)
